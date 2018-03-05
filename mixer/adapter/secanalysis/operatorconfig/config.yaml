@@ -1,0 +1,57 @@
+# instance configuration for template 'metric'
+apiVersion: "config.istio.io/v1alpha2"
+kind: metric
+metadata:
+ name: requestcount
+ namespace: istio-system
+spec:
+ value: "1"
+ dimensions:
+   source_ip: source.ip | ip("0.0.0.0")
+   source_name: source.name | "unknown"
+   source_namespace: source.namespace | "unknown"
+   source_service: source.service | "unknown"
+   source_user: source.user | "unknown"
+   source_version: source.labels["version"] | "unknown"
+   destination_ip: destination.ip | ip("0.0.0.0")
+   destination_name: destination.name | "unknown"
+   destination_namespace: destination.namespace | "unknown"
+   destination_service: destination.service | "unknown"
+   destination_version: destination.labels["version"] | "unknown"
+   request_id: request.id | "unknown"
+   request_time: request.time | time.Now()
+   request_path: request.path | "unknown"
+   request_host: request.host | "unknown"
+   request_method: request.method | "unknown"
+   request_auth_principal: request.auth.principal | "unknown"
+   request_auth_audience: request.auth.audiences | "unknown"
+   request_auth_presenter: request.auth.presenter | "unknown"
+   request_header_authz: request.headers["Authorization"] | "unknown"
+   response_code: response.code | 200
+   response_header_auth: response.headers["WWW-Authenticate"] | "unknown"
+   api_protocol: api.protocol | "unknown"
+ monitored_resource_type: '"UNSPECIFIED"'
+---
+# handler configuration for adapter 'metric'
+apiVersion: "config.istio.io/v1alpha2"
+kind: secanalysis
+metadata:
+ name: demo
+ namespace: istio-system
+spec:
+ project: "" #"my-kubernetes-codelab-195016"
+ dataset: "collection"
+ table: "mixerdata"
+---
+# rule to dispatch to your handler
+apiVersion: "config.istio.io/v1alpha2"
+kind: rule
+metadata:
+ name: mycollectionrule
+ namespace: istio-system
+spec:
+ match: "true"
+ actions:
+ - handler: demo.secanalysis
+   instances:
+   - requestcount.metric
