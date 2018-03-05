@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"github.com/spf13/cobra/doc"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"istio.io/istio/pilot/cmd"
 	"istio.io/istio/pilot/pkg/bootstrap"
@@ -34,7 +34,7 @@ import (
 var (
 	serverArgs bootstrap.PilotArgs
 
-	loggingOptions = log.NewOptions()
+	loggingOptions = log.DefaultOptions()
 
 	rootCmd = &cobra.Command{
 		Use:   "pilot-discovery",
@@ -72,6 +72,8 @@ var (
 )
 
 func init() {
+	discoveryCmd.PersistentFlags().BoolVar(&serverArgs.RDSv2, "rdsv2", false, "Enable RDS v2")
+
 	discoveryCmd.PersistentFlags().StringSliceVar(&serverArgs.Service.Registries, "registries",
 		[]string{string(bootstrap.KubernetesRegistry)},
 		fmt.Sprintf("Comma separated list of platform service registries to read from (choose one or more from {%s, %s, %s, %s, %s})",

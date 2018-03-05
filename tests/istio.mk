@@ -73,8 +73,12 @@ e2e_bookinfo: istioctl generate_yaml
 e2e_upgrade: istioctl generate_yaml
 	go test -v -timeout 20m ./tests/e2e/tests/upgrade -args ${E2E_ARGS} ${EXTRA_E2E_ARGS}
 
-e2e_all:
-	set -o pipefail; $(MAKE) e2e_simple e2e_mixer e2e_bookinfo |& tee >(go-junit-report > junit.xml)
+JUNIT_E2E_XML ?= $(ISTIO_OUT)/junit_e2e_all.xml
+e2e_all: | $(JUNIT_REPORT)
+	mkdir -p $(dir $(JUNIT_E2E_XML))
+	set -o pipefail; \
+	$(MAKE) e2e_simple e2e_mixer e2e_bookinfo \
+	|& tee >($(JUNIT_REPORT) > $(JUNIT_E2E_XML))
 
 e2e_pilot: istioctl generate_yaml
 	go test -v -timeout 20m ./tests/e2e/tests/pilot ${TESTOPTS} -hub ${HUB} -tag ${TAG}
@@ -87,6 +91,21 @@ test/minikube/auth/e2e_pilot: istioctl generate_yaml
 	go test -test.v -timeout 20m ./tests/e2e/tests/pilot -args \
 		-hub ${HUB} -tag ${TAG} \
 		--skip-cleanup --mixer=true --auth=enable \
+		-errorlogsdir=${OUT_DIR}/logs \
+		--use-sidecar-injector=false \
+		--core-files-dir=${OUT_DIR}/logs \
+         --ns istio-system \
+        -n istio-test \
+           ${TESTOPTS}
+
+# Target for running e2e pilot in a minikube env. Used by CI
+test/minikube/noauth/e2e_pilot: istioctl generate_yaml
+	mkdir -p ${OUT_DIR}/logs
+	kubectl create ns istio-system || true
+	kubectl create ns istio-test || true
+	go test -test.v -timeout 20m ./tests/e2e/tests/pilot -args \
+		-hub ${HUB} -tag ${TAG} \
+		--skip-cleanup --mixer=true \
 		-errorlogsdir=${OUT_DIR}/logs \
 		--use-sidecar-injector=false \
 		--core-files-dir=${OUT_DIR}/logs \

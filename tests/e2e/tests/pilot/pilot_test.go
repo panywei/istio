@@ -69,6 +69,8 @@ func init() {
 	flag.BoolVar(&config.Mixer, "mixer", config.Mixer, "Enable / disable mixer.")
 	flag.BoolVar(&config.V1alpha1, "v1alpha1", config.V1alpha1, "Enable / disable v1alpha1 routing rules.")
 	flag.BoolVar(&config.V1alpha2, "v1alpha2", config.V1alpha2, "Enable / disable v1alpha2 routing rules.")
+	flag.BoolVar(&config.RDSv2, "rdsv2", false, "Enable RDSv2 for v1alpha2")
+	flag.BoolVar(&config.NoRBAC, "norbac", false, "Disable RBAC YAML")
 	flag.StringVar(&config.ErrorLogsDir, "errorlogsdir", config.ErrorLogsDir,
 		"Store per pod logs as individual files in specific directory instead of writing to stderr.")
 	flag.StringVar(&config.CoreFilesDir, "core-files-dir", config.CoreFilesDir,
@@ -197,7 +199,7 @@ func doTest(testName string, config *tutil.Config, t *testing.T) {
 // TODO(nmittler): convert individual tests over to pure golang tests
 func TestMain(m *testing.M) {
 	flag.Parse()
-	_ = log.Configure(log.NewOptions())
+	_ = log.Configure(log.DefaultOptions())
 
 	// Run all tests.
 	os.Exit(m.Run())
