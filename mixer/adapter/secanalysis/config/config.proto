@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+// $title: secanalysis
+// $overview: Adapter that persist logs for security analysis.
+// $location: https://istio.io/docs/reference/config/adapters/secanalysis.html
+package adapter.secanalysis.config;
+
+import "gogoproto/gogo.proto";
+
+option go_package="config";
+
+// Configuration parameters for the secanalysis adapter.
+message Params {
+    // Name of gcloud project.
+    string project = 1;
+    // Name of BigQuery dataset used to store the mixer adapter information.
+    string dataset = 2;
+    // Name of BigQuery table used to store the mixer adapter information.
+    string table = 3;
+}
