@@ -23,7 +23,7 @@ func TestSecAnalysysAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fail to get absolute path for operatorconfig: %v", err)
 	}
-	args := server.NewArgs()
+	args := server.DefaultArgs()
 	args.APIPort = 0
 	args.MonitoringPort = 0
 	args.ConfigStoreURL = `fs://` + operatorCnfg
