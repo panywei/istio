@@ -18,16 +18,17 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/gogo/protobuf/types"
 	"github.com/golang/protobuf/proto"
 
+	authn "istio.io/api/authentication/v1alpha1"
 	mpb "istio.io/api/mixer/v1"
 	mccpb "istio.io/api/mixer/v1/config/client"
 	networking "istio.io/api/networking/v1alpha3"
+	rbac "istio.io/api/rbac/v1alpha1"
 	routing "istio.io/api/routing/v1alpha1"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/model/test"
@@ -63,6 +64,24 @@ var (
 						Weight: 80,
 					},
 				},
+			},
+		},
+	}
+
+	ExampleExternalService = &networking.ExternalService{
+		Hosts:     []string{"*.google.com"},
+		Discovery: networking.ExternalService_NONE,
+		Ports: []*networking.Port{
+			{Number: 80, Name: "http-name", Protocol: "http"},
+			{Number: 8080, Name: "http2-name", Protocol: "http2"},
+		},
+	}
+
+	ExampleGateway = &networking.Gateway{
+		Servers: []*networking.Server{
+			{
+				Hosts: []string{"google.com"},
+				Port:  &networking.Port{Name: "http", Protocol: "http", Number: 10080},
 			},
 		},
 	}
@@ -216,6 +235,45 @@ var (
 				Namespace: "default",
 			},
 		},
+	}
+
+	// ExampleAuthenticationPolicy is an example authentication Policy
+	ExampleAuthenticationPolicy = &authn.Policy{
+		Destinations: []*networking.Destination{{
+			Name: "hello",
+		}},
+		Peers: []*authn.PeerAuthenticationMethod{{
+			Params: &authn.PeerAuthenticationMethod_Mtls{},
+		}},
+	}
+
+	// ExampleServiceRole is an example rbac service role
+	ExampleServiceRole = &rbac.ServiceRole{Rules: []*rbac.AccessRule{
+		{
+			Services: []string{"service0"},
+			Methods:  []string{"GET", "POST"},
+			Constraints: []*rbac.AccessRule_Constraint{
+				{Key: "key", Values: []string{"value"}},
+				{Key: "key", Values: []string{"value"}},
+			},
+		},
+		{
+			Services: []string{"service0"},
+			Methods:  []string{"GET", "POST"},
+			Constraints: []*rbac.AccessRule_Constraint{
+				{Key: "key", Values: []string{"value"}},
+				{Key: "key", Values: []string{"value"}},
+			},
+		},
+	}}
+
+	// ExampleServiceRoleBinding is an example rbac service role binding
+	ExampleServiceRoleBinding = &rbac.ServiceRoleBinding{
+		Subjects: []*rbac.Subject{
+			{User: "User0", Group: "Group0", Properties: map[string]string{"prop0": "value0"}},
+			{User: "User1", Group: "Group1", Properties: map[string]string{"prop1": "value1"}},
+		},
+		RoleRef: &rbac.RoleRef{Kind: "ServiceRole", Name: "ServiceRole001"},
 	}
 )
 
@@ -422,6 +480,8 @@ func CheckIstioConfigTypes(store model.ConfigStore, namespace string, t *testing
 		{"RouteRule", model.RouteRule, ExampleRouteRule},
 		{"VirtualService", model.VirtualService, ExampleVirtualService},
 		{"DestinationRule", model.DestinationRule, ExampleDestinationRule},
+		{"ExternalService", model.ExternalService, ExampleExternalService},
+		{"Gatway", model.Gateway, ExampleGateway},
 		{"IngressRule", model.IngressRule, ExampleIngressRule},
 		{"EgressRule", model.EgressRule, ExampleEgressRule},
 		{"DestinationPolicy", model.DestinationPolicy, ExampleDestinationPolicy},
@@ -433,6 +493,9 @@ func CheckIstioConfigTypes(store model.ConfigStore, namespace string, t *testing
 			ExampleEndUserAuthenticationPolicySpec},
 		{"EndUserAuthenticationPolicySpecBinding", model.EndUserAuthenticationPolicySpecBinding,
 			ExampleEndUserAuthenticationPolicySpecBinding},
+		{"Policy", model.AuthenticationPolicy, ExampleAuthenticationPolicy},
+		{ "ServiceRole", model.ServiceRole, ExampleServiceRole},
+		{ "ServiceRoleBinding", model.ServiceRoleBinding, ExampleServiceRoleBinding},
 	}
 
 	for _, c := range cases {
@@ -455,28 +518,26 @@ func CheckIstioConfigTypes(store model.ConfigStore, namespace string, t *testing
 func CheckCacheEvents(store model.ConfigStore, cache model.ConfigStoreCache, namespace string, n int, t *testing.T) {
 	stop := make(chan struct{})
 	defer close(stop)
-
-	lock := sync.Mutex{}
-
-	added, deleted := 0, 0
+	ach, dch := make(chan bool, n), make(chan bool, n)
+	defer close(ach)
+	defer close(dch)
+	sad, sdd := 0, 0
 	cache.RegisterEventHandler(model.MockConfig.Type, func(c model.Config, ev model.Event) {
-
-		lock.Lock()
-		defer lock.Unlock()
-
 		switch ev {
 		case model.EventAdd:
-			if deleted != 0 {
+			if sdd != 0 {
 				t.Errorf("Events are not serialized (add)")
 			}
-			added++
+			sad++
+			ach <- true
 		case model.EventDelete:
-			if added != n {
+			if sad != n {
 				t.Errorf("Events are not serialized (delete)")
 			}
-			deleted++
+			sdd++
+			dch <- true
 		}
-		log.Infof("Added %d, deleted %d", added, deleted)
+		log.Infof("Added %d, deleted %d", sad, sdd)
 	})
 	go cache.Run(stop)
 
@@ -484,19 +545,29 @@ func CheckCacheEvents(store model.ConfigStore, cache model.ConfigStoreCache, nam
 	CheckMapInvariant(store, t, namespace, n)
 
 	log.Infof("Waiting till all events are received")
-	util.Eventually(func() bool {
-		lock.Lock()
-		defer lock.Unlock()
-		return added == n && deleted == n
-
-	}, t)
+	timeout := time.After(60 * time.Second)
+	added, deleted := 0, 0
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("timeout waiting to receive expected events. actual added %d deleted %d. expected %d",
+				added, deleted, n)
+		case <-ach:
+			added++
+		case <-dch:
+			deleted++
+		default:
+			if added == n && deleted == n {
+				return
+			}
+		}
+	}
 }
 
 // CheckCacheFreshness validates operational invariants of a cache
 func CheckCacheFreshness(cache model.ConfigStoreCache, namespace string, t *testing.T) {
 	stop := make(chan struct{})
-	var doneMu sync.Mutex
-	done := false
+	done := make(chan bool)
 	o := Make(namespace, 0)
 
 	// validate cache consistency
@@ -536,9 +607,7 @@ func CheckCacheFreshness(cache model.ConfigStoreCache, namespace string, t *test
 			}
 			log.Infof("Stopping channel for (%#v)", config.Key)
 			close(stop)
-			doneMu.Lock()
-			done = true
-			doneMu.Unlock()
+			done <- true
 		}
 	})
 
@@ -555,11 +624,13 @@ func CheckCacheFreshness(cache model.ConfigStoreCache, namespace string, t *test
 		t.Error(err)
 	}
 
-	util.Eventually(func() bool {
-		doneMu.Lock()
-		defer doneMu.Unlock()
-		return done
-	}, t)
+	timeout := time.After(10 * time.Second)
+	select {
+	case <-timeout:
+		t.Fatalf("timeout waiting to be done")
+	case <-done:
+		return
+	}
 }
 
 // CheckCacheSync validates operational invariants of a cache against the
@@ -578,7 +649,7 @@ func CheckCacheSync(store model.ConfigStore, cache model.ConfigStoreCache, names
 	stop := make(chan struct{})
 	defer close(stop)
 	go cache.Run(stop)
-	util.Eventually(func() bool { return cache.HasSynced() }, t)
+	util.Eventually("HasSynced", cache.HasSynced, t)
 	os, _ := cache.List(model.MockConfig.Type, namespace)
 	if len(os) != n {
 		t.Errorf("cache.List => Got %d, expected %d", len(os), n)
@@ -592,7 +663,7 @@ func CheckCacheSync(store model.ConfigStore, cache model.ConfigStoreCache, names
 	}
 
 	// check again in the controller cache
-	util.Eventually(func() bool {
+	util.Eventually("no elements in cache", func() bool {
 		os, _ = cache.List(model.MockConfig.Type, namespace)
 		log.Infof("cache.List => Got %d, expected %d", len(os), 0)
 		return len(os) == 0
@@ -606,7 +677,7 @@ func CheckCacheSync(store model.ConfigStore, cache model.ConfigStoreCache, names
 	}
 
 	// check directly through the client
-	util.Eventually(func() bool {
+	util.Eventually("cache and backing store match", func() bool {
 		cs, _ := cache.List(model.MockConfig.Type, namespace)
 		os, _ := store.List(model.MockConfig.Type, namespace)
 		log.Infof("cache.List => Got %d, expected %d", len(cs), n)

@@ -26,7 +26,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/ghodss/yaml"
-	"github.com/hashicorp/go-multierror"
+	multierror "github.com/hashicorp/go-multierror"
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
 
@@ -100,22 +100,20 @@ See https://istio.io/docs/reference/ for an overview of routing rules
 and destination policies.
 
 `,
-		PersistentPreRun: getRealKubeConfig,
-
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if err := log.Configure(loggingOptions); err != nil {
 				return err
 			}
+			getRealKubeConfig(cmd, args)
 			defaultNamespace = getDefaultNamespace(kubeconfig)
 			return nil
 		},
 	}
 
 	postCmd = &cobra.Command{
-		Use:              "create",
-		Short:            "Create policies and rules",
-		Example:          "istioctl create -f example-routing.yaml",
-		PersistentPreRun: getRealKubeConfig,
+		Use:     "create",
+		Short:   "Create policies and rules",
+		Example: "istioctl create -f example-routing.yaml",
 		RunE: func(c *cobra.Command, args []string) error {
 			if len(args) != 0 {
 				c.Println(c.UsageString())
@@ -183,10 +181,9 @@ and destination policies.
 	}
 
 	putCmd = &cobra.Command{
-		Use:              "replace",
-		Short:            "Replace existing policies and rules",
-		Example:          "istioctl replace -f example-routing.yaml",
-		PersistentPreRun: getRealKubeConfig,
+		Use:     "replace",
+		Short:   "Replace existing policies and rules",
+		Example: "istioctl replace -f example-routing.yaml",
 		RunE: func(c *cobra.Command, args []string) error {
 			if len(args) != 0 {
 				c.Println(c.UsageString())
@@ -288,7 +285,6 @@ istioctl get destinationpolicies
 # Get a specific rule named productpage-default
 istioctl get routerule productpage-default
 `,
-		PersistentPreRun: getRealKubeConfig,
 		RunE: func(c *cobra.Command, args []string) error {
 			configClient, err := newClient()
 			if err != nil {
@@ -306,15 +302,15 @@ istioctl get routerule productpage-default
 				return err
 			}
 
-			ns, _ := handleNamespaces(v1.NamespaceAll)
 			var configs []model.Config
 			if len(args) > 1 {
+				ns, _ := handleNamespaces(v1.NamespaceAll)
 				config, exists := configClient.Get(typ.Type, args[1], ns)
 				if exists {
 					configs = append(configs, *config)
 				}
 			} else {
-				configs, err = configClient.List(typ.Type, ns)
+				configs, err = configClient.List(typ.Type, namespace)
 				if err != nil {
 					return err
 				}
@@ -349,7 +345,6 @@ istioctl delete -f example-routing.yaml
 # Delete the rule productpage-default
 istioctl delete routerule productpage-default
 `,
-		PersistentPreRun: getRealKubeConfig,
 		RunE: func(c *cobra.Command, args []string) error {
 			configClient, errs := newClient()
 			if errs != nil {
@@ -365,8 +360,12 @@ istioctl delete routerule productpage-default
 				if err != nil {
 					return err
 				}
+				ns, err := handleNamespaces(namespace)
+				if err != nil {
+					return err
+				}
 				for i := 1; i < len(args); i++ {
-					if err := configClient.Delete(typ.Type, args[i], namespace); err != nil {
+					if err := configClient.Delete(typ.Type, args[i], ns); err != nil {
 						errs = multierror.Append(errs,
 							fmt.Errorf("cannot delete %s: %v", args[i], err))
 					} else {
@@ -442,7 +441,6 @@ istioctl delete routerule productpage-default
 		Example: `# Create a config file for the api server.
 istioctl context-create --api-server http://127.0.0.1:8080
 `,
-		PersistentPreRun: getRealKubeConfig,
 		RunE: func(c *cobra.Command, args []string) error {
 			if istioAPIServer == "" {
 				c.Println(c.UsageString())
@@ -665,6 +663,7 @@ func newClient() (*crd.Client, error) {
 		model.QuotaSpecBinding,
 		model.EndUserAuthenticationPolicySpec,
 		model.EndUserAuthenticationPolicySpecBinding,
+		model.AuthenticationPolicy,
 	}, "")
 }
 

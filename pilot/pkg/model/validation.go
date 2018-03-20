@@ -32,10 +32,12 @@ import (
 	"github.com/golang/protobuf/ptypes/duration"
 	multierror "github.com/hashicorp/go-multierror"
 
+	authn "istio.io/api/authentication/v1alpha1"
 	meshconfig "istio.io/api/mesh/v1alpha1"
 	mpb "istio.io/api/mixer/v1"
 	mccpb "istio.io/api/mixer/v1/config/client"
 	networking "istio.io/api/networking/v1alpha3"
+	rbac "istio.io/api/rbac/v1alpha1"
 	routing "istio.io/api/routing/v1alpha1"
 )
 
@@ -1100,13 +1102,14 @@ func validateTrafficPolicy(policy *networking.TrafficPolicy) error {
 	if policy == nil {
 		return nil
 	}
-	if policy.OutlierDetection == nil && policy.ConnectionPool == nil && policy.LoadBalancer == nil {
+	if policy.OutlierDetection == nil && policy.ConnectionPool == nil && policy.LoadBalancer == nil && policy.Tls == nil {
 		return fmt.Errorf("traffic policy must have at least one field")
 	}
 
 	return appendErrors(validateOutlierDetection(policy.OutlierDetection),
 		validateConnectionPool(policy.ConnectionPool),
-		validateLoadBalancer(policy.LoadBalancer))
+		validateLoadBalancer(policy.LoadBalancer),
+		validateTLS(policy.Tls))
 }
 
 func validateOutlierDetection(outlier *networking.OutlierDetection) (errs error) {
@@ -1119,13 +1122,13 @@ func validateOutlierDetection(outlier *networking.OutlierDetection) (errs error)
 
 	http := outlier.Http
 	if http.BaseEjectionTime != nil {
-		errs = appendErrors(errs, ValidateDuration(http.BaseEjectionTime))
+		errs = appendErrors(errs, ValidateDurationGogo(http.BaseEjectionTime))
 	}
 	if http.ConsecutiveErrors < 0 {
 		errs = appendErrors(errs, fmt.Errorf("outlier detection consecutive errors cannot be negative"))
 	}
 	if http.Interval != nil {
-		errs = appendErrors(errs, ValidateDuration(http.Interval))
+		errs = appendErrors(errs, ValidateDurationGogo(http.Interval))
 	}
 	errs = appendErrors(errs, ValidatePercent(http.MaxEjectionPercent))
 
@@ -1160,7 +1163,7 @@ func validateConnectionPool(settings *networking.ConnectionPoolSettings) (errs e
 			errs = appendErrors(errs, fmt.Errorf("max connections must be non-negative"))
 		}
 		if tcp.ConnectTimeout != nil {
-			errs = appendErrors(errs, ValidateDuration(tcp.ConnectTimeout))
+			errs = appendErrors(errs, ValidateDurationGogo(tcp.ConnectTimeout))
 		}
 	}
 
@@ -1174,6 +1177,23 @@ func validateLoadBalancer(settings *networking.LoadBalancerSettings) (errs error
 
 	// simple load balancing is always valid
 	// TODO: settings.GetConsistentHash()
+
+	return
+}
+
+func validateTLS(settings *networking.TLSSettings) (errs error) {
+	if settings == nil {
+		return
+	}
+
+	if settings.Mode == networking.TLSSettings_MUTUAL {
+		if settings.ClientCertificate == "" {
+			errs = appendErrors(errs, fmt.Errorf("client certificate required for mutual tls"))
+		}
+		if settings.PrivateKey == "" {
+			errs = appendErrors(errs, fmt.Errorf("private key required for mutual tls"))
+		}
+	}
 
 	return
 }
@@ -1221,25 +1241,39 @@ func ValidateDestinationPolicy(msg proto.Message) error {
 
 // ValidateProxyAddress checks that a network address is well-formed
 func ValidateProxyAddress(hostAddr string) error {
-	colon := strings.Index(hostAddr, ":")
-	if colon < 0 {
-		return fmt.Errorf("':' separator not found in %q, host address must be of the form <DNS name>:<port> or <IP>:<port>",
-			hostAddr)
-	}
-	port, err := strconv.Atoi(hostAddr[colon+1:])
+	host, p, err := net.SplitHostPort(hostAddr)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to split %q: %v", hostAddr, err)
+	}
+	port, err := strconv.Atoi(p)
+	if err != nil {
+		return fmt.Errorf("port (%s) is not a number: %v", p, err)
 	}
 	if err = ValidatePort(port); err != nil {
 		return err
 	}
-	host := hostAddr[:colon]
 	if err = ValidateFQDN(host); err != nil {
-		if err = ValidateIPv4Address(host); err != nil {
-			return fmt.Errorf("%q is not a valid hostname or an IPv4 address", host)
+		ip := net.ParseIP(host)
+		if ip == nil {
+			return fmt.Errorf("%q is not a valid hostname or an IP address", host)
 		}
 	}
 
+	return nil
+}
+
+// ValidateDurationGogo checks that a gogo proto duration is well-formed
+func ValidateDurationGogo(pd *types.Duration) error {
+	dur, err := types.DurationFromProto(pd)
+	if err != nil {
+		return err
+	}
+	if dur < time.Millisecond {
+		return errors.New("duration must be greater than 1ms")
+	}
+	if dur%time.Millisecond != 0 {
+		return errors.New("only durations to ms precision are supported")
+	}
 	return nil
 }
 
@@ -1424,7 +1458,7 @@ func ValidateProxyConfig(config *meshconfig.ProxyConfig) (errs error) {
 
 	if config.StatsdUdpAddress != "" {
 		if err := ValidateProxyAddress(config.StatsdUdpAddress); err != nil {
-			errs = multierror.Append(errs, multierror.Prefix(err, "invalid statsd udp address:"))
+			errs = multierror.Append(errs, multierror.Prefix(err, fmt.Sprintf("invalid statsd udp address %q:", config.StatsdUdpAddress)))
 		}
 	}
 
@@ -1649,6 +1683,131 @@ func ValidateQuotaSpecBinding(msg proto.Message) error {
 	return errs
 }
 
+// ValidateAuthenticationPolicy checks that AuthenticationPolicy is well-formed.
+func ValidateAuthenticationPolicy(msg proto.Message) error {
+	in, ok := msg.(*authn.Policy)
+	if !ok {
+		return errors.New("cannot cast to AuthenticationPolicy")
+	}
+	var errs error
+
+	for _, dest := range in.Destinations {
+		errs = appendErrors(errs, validateDestination(dest))
+	}
+
+	for _, method := range in.Peers {
+		errs = appendErrors(errs, validateJwt(method.GetJwt()))
+	}
+
+	for _, rule := range in.CredentialRules {
+		if rule.Binding == authn.CredentialRule_USE_ORIGIN {
+			if len(rule.Origins) == 0 {
+				errs = multierror.Append(
+					errs, errors.New("credential use origin must define at least one method"))
+			}
+		}
+		for _, method := range rule.Origins {
+			errs = appendErrors(errs, validateJwt(method.Jwt))
+		}
+	}
+	return errs
+}
+
+// ValidateServiceRole checks that ServiceRole is well-formed.
+func ValidateServiceRole(msg proto.Message) error {
+	in, ok := msg.(*rbac.ServiceRole)
+	if !ok {
+		return errors.New("cannot cast to ServiceRole")
+	}
+	var errs error
+	if len(in.Rules) == 0 {
+		errs = appendErrors(errs, fmt.Errorf("at least 1 rule must be specified"))
+	}
+	for i, rule := range in.Rules {
+		if len(rule.Services) == 0 {
+			errs = appendErrors(errs, fmt.Errorf("at least 1 service must be specified for rule %d", i))
+		}
+		if len(rule.Methods) == 0 {
+			errs = appendErrors(errs, fmt.Errorf("at least 1 method must be specified for rule %d", i))
+		}
+		for j, constraint := range rule.Constraints {
+			if len(constraint.Key) == 0 {
+				errs = appendErrors(errs, fmt.Errorf("key cannot be empty for constraint %d in rule %d", j, i))
+			}
+			if len(constraint.Values) == 0 {
+				errs = appendErrors(errs, fmt.Errorf("at least 1 value must be specified for constraint %d in rule %d", j, i))
+			}
+		}
+	}
+	return errs
+}
+
+// ValidateServiceRoleBinding checks that ServiceRoleBinding is well-formed.
+func ValidateServiceRoleBinding(msg proto.Message) error {
+	in, ok := msg.(*rbac.ServiceRoleBinding)
+	if !ok {
+		return errors.New("cannot cast to ServiceRoleBinding")
+	}
+	var errs error
+	if len(in.Subjects) == 0 {
+		errs = appendErrors(errs, fmt.Errorf("at least 1 subject must be specified"))
+	}
+	for i, subject := range in.Subjects {
+		if len(subject.User) == 0 && len(subject.Group) == 0 && len(subject.Properties) == 0 {
+			errs = appendErrors(errs, fmt.Errorf("at least 1 of user, group or properties must be specified for subject %d", i))
+		}
+	}
+	if in.RoleRef == nil {
+		errs = appendErrors(errs, fmt.Errorf("roleRef must be specified"))
+	} else {
+		expectKind := "ServiceRole"
+		if in.RoleRef.Kind != expectKind {
+			errs = appendErrors(errs, fmt.Errorf("kind set to %q, currently the only supported value is %q",
+				in.RoleRef.Kind, expectKind))
+		}
+		if len(in.RoleRef.Name) == 0 {
+			errs = appendErrors(errs, fmt.Errorf("name cannot be empty"))
+		}
+	}
+	return errs
+}
+
+func validateJwt(jwt *authn.Jwt) (errs error) {
+	if jwt == nil {
+		return nil
+	}
+	if jwt.Issuer == "" {
+		errs = multierror.Append(errs, errors.New("issuer must be set"))
+	}
+	for _, audience := range jwt.Audiences {
+		if audience == "" {
+			errs = multierror.Append(errs, errors.New("audience must be non-empty string"))
+		}
+	}
+	if jwt.JwksUri == "" {
+		errs = multierror.Append(errs, errors.New("jwks_uri must be set"))
+	}
+	if !strings.HasPrefix(jwt.JwksUri, "http://") && !strings.HasPrefix(jwt.JwksUri, "https://") {
+		errs = multierror.Append(errs, errors.New("jwks_uri must have http:// or https:// scheme"))
+	}
+	if _, err := url.Parse(jwt.JwksUri); err != nil {
+		errs = multierror.Append(errs, fmt.Errorf("%q is not a valid url: %v", jwt.JwksUri, err))
+	}
+
+	for _, location := range jwt.JwtHeaders {
+		if location == "" {
+			errs = multierror.Append(errs, errors.New("location header must be non-empty string"))
+		}
+	}
+
+	for _, location := range jwt.JwtParams {
+		if location == "" {
+			errs = multierror.Append(errs, errors.New("location query must be non-empty string"))
+		}
+	}
+	return
+}
+
 // ValidateEndUserAuthenticationPolicySpec checks that EndUserAuthenticationPolicySpec is well-formed.
 func ValidateEndUserAuthenticationPolicySpec(msg proto.Message) error {
 	in, ok := msg.(*mccpb.EndUserAuthenticationPolicySpec)
@@ -1728,11 +1887,11 @@ func ValidateEndUserAuthenticationPolicySpecBinding(msg proto.Message) error {
 	return errs
 }
 
-// ValidateVirtualService checks that a v1alpha2 route rule is well-formed.
+// ValidateVirtualService checks that a v1alpha3 route rule is well-formed.
 func ValidateVirtualService(msg proto.Message) (errs error) {
 	routeRule, ok := msg.(*networking.VirtualService)
 	if !ok {
-		return errors.New("cannot cast to v1alpha2 routing rule")
+		return errors.New("cannot cast to v1alpha3 routing rule")
 	}
 
 	// TODO: routeRule.Gateways
@@ -1785,6 +1944,8 @@ func validateHTTPRoute(http *networking.HTTPRoute) (errs error) {
 		if http.WebsocketUpgrade {
 			errs = appendErrors(errs, errors.New("WebSocket upgrade is not allowed on redirect rules")) // nolint: golint
 		}
+	} else if len(http.Route) == 0 {
+		errs = appendErrors(errs, errors.New("HTTP route or redirect is required"))
 	}
 
 	for name := range http.AppendHeaders {
@@ -1817,7 +1978,7 @@ func validateHTTPRoute(http *networking.HTTPRoute) (errs error) {
 		errs = appendErrors(errs, ValidatePercent(route.Weight))
 	}
 	if http.Timeout != nil {
-		errs = appendErrors(errs, ValidateDuration(http.Timeout))
+		errs = appendErrors(errs, ValidateDurationGogo(http.Timeout))
 	}
 
 	return
@@ -1843,7 +2004,7 @@ func validateCORSPolicy(policy *networking.CorsPolicy) (errs error) {
 	}
 
 	if policy.MaxAge != nil {
-		errs = appendErrors(errs, ValidateDuration(policy.MaxAge))
+		errs = appendErrors(errs, ValidateDurationGogo(policy.MaxAge))
 		if policy.MaxAge.Nanos > 0 {
 			errs = multierror.Append(errs, errors.New("max_age duration is accurate only to seconds precision"))
 		}
@@ -1912,9 +2073,9 @@ func validateHTTPFaultInjectionDelay(delay *networking.HTTPFaultInjection_Delay)
 	errs = appendErrors(errs, ValidatePercent(delay.Percent))
 	switch v := delay.HttpDelayType.(type) {
 	case *networking.HTTPFaultInjection_Delay_FixedDelay:
-		errs = appendErrors(errs, ValidateDuration(v.FixedDelay))
+		errs = appendErrors(errs, ValidateDurationGogo(v.FixedDelay))
 	case *networking.HTTPFaultInjection_Delay_ExponentialDelay:
-		errs = appendErrors(errs, ValidateDuration(v.ExponentialDelay))
+		errs = appendErrors(errs, ValidateDurationGogo(v.ExponentialDelay))
 		errs = multierror.Append(errs, fmt.Errorf("exponentialDelay not supported yet"))
 	}
 	return
@@ -1972,7 +2133,7 @@ func validateHTTPRetry(retries *networking.HTTPRetry) (errs error) {
 		errs = multierror.Append(errs, errors.New("attempts must be positive"))
 	}
 	if retries.PerTryTimeout != nil {
-		errs = appendErrors(errs, ValidateDuration(retries.PerTryTimeout))
+		errs = appendErrors(errs, ValidateDurationGogo(retries.PerTryTimeout))
 	}
 	return
 }

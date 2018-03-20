@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	rpc "github.com/gogo/googleapis/google/rpc"
 	"github.com/gogo/protobuf/proto"
 	multierror "github.com/hashicorp/go-multierror"
 	opentracing "github.com/opentracing/opentracing-go"
@@ -31,7 +32,6 @@ import (
 
 	adptTmpl "istio.io/api/mixer/adapter/model/v1beta1"
 	cpb "istio.io/api/policy/v1beta1"
-	rpc "istio.io/gogo-genproto/googleapis/google/rpc"
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/pkg/attribute"
 	"istio.io/istio/mixer/pkg/expr"
@@ -300,12 +300,9 @@ func (m *dispatcher) Preprocess(ctx context.Context, requestBag attribute.Bag, r
 						if err == nil {
 							lock.Lock()
 							defer lock.Unlock()
-							err = responseBag.Merge(mBag)
-
-							if err != nil {
-								log.Infof("Attributes merging failed %v", err)
+							if mBag != nil {
+								responseBag.Merge(mBag)
 							}
-
 						}
 						return &result{err, nil, call}
 					})
@@ -314,7 +311,7 @@ func (m *dispatcher) Preprocess(ctx context.Context, requestBag attribute.Bag, r
 		},
 	)
 
-	log.Debugf("Attributes generated from preprocess phase are %v", responseBag.DebugString())
+	log.Debugf("Attributes generated from preprocess phase are %v", responseBag)
 	return err
 }
 

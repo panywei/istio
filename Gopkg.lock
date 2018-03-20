@@ -78,6 +78,21 @@
 
 [[projects]]
   branch = "master"
+  name = "github.com/alecthomas/template"
+  packages = [
+    ".",
+    "parse"
+  ]
+  revision = "a0175ee3bccc567396460bf5acd36800cb10c49c"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/alecthomas/units"
+  packages = ["."]
+  revision = "2efee857e7cfd4f3d0138cc3cbb1b4966962b93a"
+
+[[projects]]
+  branch = "master"
   name = "github.com/alicebob/gopher-json"
   packages = ["."]
   revision = "5a6b3ba71ee69b77cf64febf8b5a7526ca5eaef0"
@@ -231,6 +246,7 @@
   version = "v2.6.0"
 
 [[projects]]
+  branch = "master"
   name = "github.com/envoyproxy/go-control-plane"
   packages = [
     "envoy/api/v2",
@@ -241,14 +257,20 @@
     "envoy/api/v2/listener",
     "envoy/api/v2/route",
     "envoy/config/filter/accesslog/v2",
+    "envoy/config/filter/fault/v2",
+    "envoy/config/filter/http/fault/v2",
     "envoy/config/filter/network/http_connection_manager/v2",
+    "envoy/config/filter/network/mongo_proxy/v2",
+    "envoy/config/filter/network/redis_proxy/v2",
+    "envoy/config/filter/network/tcp_proxy/v2",
     "envoy/service/discovery/v2",
+    "envoy/type",
     "pkg/cache",
     "pkg/log",
     "pkg/server",
     "pkg/util"
   ]
-  revision = "c517738a012f46dda2754ccfbc1da2628e0905ca"
+  revision = "aa344ee5f4fff239fadab634413ca6764025511c"
 
 [[projects]]
   name = "github.com/fluent/fluent-logger-golang"
@@ -329,6 +351,15 @@
   ]
   revision = "5ccd90ef52e1e632236f7326478d4faa74f99438"
   version = "v0.2.3"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/gogo/googleapis"
+  packages = [
+    "google/api",
+    "google/rpc"
+  ]
+  revision = "0cd9801be74a10d5ac39d69626eac8255ffcd502"
 
 [[projects]]
   name = "github.com/gogo/protobuf"
@@ -790,6 +821,7 @@
   packages = [
     "expfmt",
     "internal/bitbucket.org/ww/goautoneg",
+    "log",
     "model"
   ]
   revision = "6fb6fce6f8b75884b92e1889c150403fc0872c5e"
@@ -804,6 +836,12 @@
     "xfs"
   ]
   revision = "d274e363d5759d1c916232217be421f1cc89c5fe"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/prometheus/prom2json"
+  packages = ["."]
+  revision = "daa2bca1c13fce65dabc24d4fbd5054d50cf66d9"
 
 [[projects]]
   name = "github.com/russross/blackfriday"
@@ -822,6 +860,12 @@
   name = "github.com/shurcooL/sanitized_anchor_name"
   packages = ["."]
   revision = "86672fcb3f950f35f2e675df2240550f2a50762f"
+
+[[projects]]
+  name = "github.com/sirupsen/logrus"
+  packages = ["."]
+  revision = "d682213848ed68c0a260ca37d6dd5ace8423f5ba"
+  version = "v1.0.4"
 
 [[projects]]
   name = "github.com/spf13/cobra"
@@ -976,7 +1020,9 @@
   name = "golang.org/x/sys"
   packages = [
     "unix",
-    "windows"
+    "windows",
+    "windows/registry",
+    "windows/svc/eventlog"
   ]
   revision = "f6cff0780e542efa0c8e864dc8fa522808f6a598"
 
@@ -1122,6 +1168,12 @@
   version = "v1.10.0"
 
 [[projects]]
+  name = "gopkg.in/alecthomas/kingpin.v2"
+  packages = ["."]
+  revision = "947dcec5ba9c011838740e680966fd7087a71d0d"
+  version = "v2.2.6"
+
+[[projects]]
   name = "gopkg.in/inf.v0"
   packages = ["."]
   revision = "3887ee99ecf07df5b447e9b00d9c0b2adaa9f3e4"
@@ -1156,19 +1208,23 @@
   version = "v2.1.1"
 
 [[projects]]
+  branch = "master"
   name = "istio.io/api"
   packages = [
+    "authentication/v1alpha1",
     "broker/dev",
     "mesh/v1alpha1",
     "mixer/adapter/model/v1beta1",
     "mixer/v1",
+    "mixer/v1/config",
     "mixer/v1/config/client",
+    "mixer/v1/config/descriptor",
     "networking/v1alpha3",
     "policy/v1beta1",
     "rbac/v1alpha1",
     "routing/v1alpha1"
   ]
-  revision = "0cb6ca9f2a06370b8734f4e4c0d62b77ec5975d3"
+  revision = "10c6d3aa4f2f1dec0927331401b63137d4e0e635"
 
 [[projects]]
   name = "istio.io/fortio"
@@ -1183,16 +1239,7 @@
     "ui",
     "version"
   ]
-  revision = "latest_release"
-
-[[projects]]
-  branch = "master"
-  name = "istio.io/gogo-genproto"
-  packages = [
-    "googleapis/google/api",
-    "googleapis/google/rpc"
-  ]
-  revision = "dd2b5b6a8f1400838165245e704a011a30154a44"
+  revision = "v0.8.0"
 
 [[projects]]
   branch = "release-1.9"
@@ -1473,6 +1520,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "a141285fea5a60d06e0e07507e7482df7a08229ed66e389e9a0b5184ddaa8751"
+  inputs-digest = "69d4f0b300945d3929b747bf5fde5fb8ed31ddcf9343b70d485530383971d706"
   solver-name = "gps-cdcl"
   solver-version = 1

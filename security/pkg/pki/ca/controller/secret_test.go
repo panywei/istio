@@ -19,8 +19,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg/errors"
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
@@ -47,6 +49,7 @@ func TestSecretController(t *testing.T) {
 		saToDelete      *v1.ServiceAccount
 		sasToUpdate     *updatedSas
 		expectedActions []ktesting.Action
+		injectFailure   bool
 	}{
 		"adding service account creates new secret": {
 			saToAdd: createServiceAccount("test", "test-ns"),
@@ -82,10 +85,32 @@ func TestSecretController(t *testing.T) {
 			saToAdd:         createServiceAccount("test", "test-ns"),
 			expectedActions: []ktesting.Action{},
 		},
+		"adding service account retries when failed": {
+			saToAdd: createServiceAccount("test", "test-ns"),
+			expectedActions: []ktesting.Action{
+				ktesting.NewCreateAction(gvr, "test-ns", createSecret("test", "istio.test", "test-ns")),
+				ktesting.NewCreateAction(gvr, "test-ns", createSecret("test", "istio.test", "test-ns")),
+				ktesting.NewCreateAction(gvr, "test-ns", createSecret("test", "istio.test", "test-ns")),
+			},
+			injectFailure: true,
+		},
 	}
 
 	for k, tc := range testCases {
 		client := fake.NewSimpleClientset()
+
+		if tc.injectFailure {
+			callCount := 0
+			// PrependReactor to ensure action handled by our handler.
+			client.Fake.PrependReactor("*", "*", func(a ktesting.Action) (bool, runtime.Object, error) {
+				callCount++
+				if callCount < secretCreationRetry {
+					return true, nil, errors.New("failed to create secret deliberately")
+				}
+				return true, nil, nil
+			})
+		}
+
 		controller, err := NewSecretController(createFakeCA(), defaultTTL, defaultGracePeriodRatio, defaultMinGracePeriod,
 			client.CoreV1(), metav1.NamespaceAll)
 		if err != nil {
@@ -115,23 +140,58 @@ func TestSecretController(t *testing.T) {
 	}
 }
 
-func TestRecoverFromDeletedIstioSecret(t *testing.T) {
+func TestDeletedIstioSecret(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	controller, err := NewSecretController(createFakeCA(), defaultTTL, defaultGracePeriodRatio, defaultMinGracePeriod,
 		client.CoreV1(), metav1.NamespaceAll)
 	if err != nil {
 		t.Errorf("failed to create secret controller: %v", err)
 	}
-	scrt := createSecret("test", "istio.test", "test-ns")
-	controller.scrtDeleted(scrt)
+	sa := createServiceAccount("test-sa", "test-ns")
+	if _, err := client.CoreV1().ServiceAccounts("test-ns").Create(sa); err != nil {
+		t.Error(err)
+	}
 
-	gvr := schema.GroupVersionResource{
+	saGvr := schema.GroupVersionResource{
+		Resource: "serviceaccounts",
+		Version:  "v1",
+	}
+	scrtGvr := schema.GroupVersionResource{
 		Resource: "secrets",
 		Version:  "v1",
 	}
-	expectedActions := []ktesting.Action{ktesting.NewCreateAction(gvr, "test-ns", scrt)}
-	if err := checkActions(client.Actions(), expectedActions); err != nil {
-		t.Error(err)
+
+	testCases := map[string]struct {
+		secret          *v1.Secret
+		expectedActions []ktesting.Action
+	}{
+		"Recover secret for existing service account": {
+			secret: createSecret("test-sa", "istio.test-sa", "test-ns"),
+			expectedActions: []ktesting.Action{
+				ktesting.NewGetAction(saGvr, "test-ns", "test-sa"),
+				ktesting.NewCreateAction(scrtGvr, "test-ns", createSecret("test-sa", "istio.test-sa", "test-ns")),
+			},
+		},
+		"Do not recover secret for non-existing service account in the same namespace": {
+			secret: createSecret("test-sa2", "istio.test-sa2", "test-ns"),
+			expectedActions: []ktesting.Action{
+				ktesting.NewGetAction(saGvr, "test-ns", "test-sa2"),
+			},
+		},
+		"Do not recover secret for service account in different namespace": {
+			secret: createSecret("test-sa", "istio.test-sa", "test-ns2"),
+			expectedActions: []ktesting.Action{
+				ktesting.NewGetAction(saGvr, "test-ns2", "test-sa"),
+			},
+		},
+	}
+
+	for k, tc := range testCases {
+		client.ClearActions()
+		controller.scrtDeleted(tc.secret)
+		if err := checkActions(client.Actions(), tc.expectedActions); err != nil {
+			t.Errorf("Failure in test case %s: %v", k, err)
+		}
 	}
 }
 
