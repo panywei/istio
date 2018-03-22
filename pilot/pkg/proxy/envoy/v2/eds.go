@@ -35,6 +35,10 @@ import (
 	xdsapi "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	"github.com/gogo/protobuf/types"
 
+	"istio.io/istio/pilot/pkg/proxy/envoy/v1"
+
+	"strings"
+
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/log"
 )
@@ -115,7 +119,7 @@ type EdsConnection struct {
 }
 
 // Endpoints aggregate a DiscoveryResponse for pushing.
-func (s *DiscoveryServer) endpoints(clusterNames []string) *xdsapi.DiscoveryResponse {
+func (s *DiscoveryServer) endpoints(ds *v1.DiscoveryService, clusterNames []string) *xdsapi.DiscoveryResponse {
 	// Not using incCounters/observeResources: grpc has an interceptor for prometheus.
 	version := strconv.Itoa(version)
 	clAssignment := &xdsapi.ClusterLoadAssignment{}
@@ -134,7 +138,7 @@ func (s *DiscoveryServer) endpoints(clusterNames []string) *xdsapi.DiscoveryResp
 
 	out.Resources = make([]types.Any, 0, len(clusterNames))
 	for _, clusterName := range clusterNames {
-		clAssignmentRes := s.clusterEndpoints(clusterName)
+		clAssignmentRes := s.clusterEndpoints(ds, clusterName)
 		if clAssignmentRes != nil {
 			out.Resources = append(out.Resources, *clAssignmentRes)
 		}
@@ -144,7 +148,7 @@ func (s *DiscoveryServer) endpoints(clusterNames []string) *xdsapi.DiscoveryResp
 }
 
 // Get the ClusterLoadAssignment for a cluster.
-func (s *DiscoveryServer) clusterEndpoints(clusterName string) *types.Any {
+func (s *DiscoveryServer) clusterEndpoints(ds *v1.DiscoveryService, clusterName string) *types.Any {
 	c := s.getOrAddEdsCluster(clusterName)
 	if c.LoadAssignment == nil { // fresh cluster
 		updateCluster(clusterName, c)
@@ -189,7 +193,21 @@ func newEndpoint(address string, port uint32) (*endpoint.LbEndpoint, error) {
 // the endpoints for the cluster.
 func updateCluster(clusterName string, edsCluster *EdsCluster) {
 	// TODO: should we lock this as well ? Once we move to event-based it may not matter.
-	hostname, ports, labels := model.ParseServiceKey(clusterName)
+	var hostname string
+	var ports model.PortList
+	var labels model.LabelsCollection
+
+	// This is a gross hack but Costin will insist on supporting everything from ancient Greece
+	if strings.Index(clusterName, "outbound") == 0 { //new style cluster names
+		var p *model.Port
+		var subsetName string
+		_, hostname, subsetName, p = model.ParseSubsetKey(clusterName)
+		ports = []*model.Port{p}
+		labels = edsCluster.discovery.mesh.SubsetToLabels(subsetName, hostname, "")
+	} else {
+		hostname, ports, labels = model.ParseServiceKey(clusterName)
+	}
+
 	instances, err := edsCluster.discovery.mesh.Instances(hostname, ports.GetNames(), labels)
 	if err != nil {
 		log.Warnf("endpoints for service cluster %q returned error %q", clusterName, err)
@@ -335,18 +353,20 @@ func (s *DiscoveryServer) StreamEndpoints(stream xdsapi.EndpointDiscoveryService
 			if discReq.ResponseNonce != "" {
 				// TODO: once the deps are updated, log the ErrorCode if set (missing in current version)
 				if edsDebug {
-					log.Infof("EDS: ACK %s %s %s", node, discReq.VersionInfo, con.Clusters)
+					log.Infof("EDS: ACK %s %s %s %s", node, discReq.VersionInfo, con.Clusters, discReq.String())
 				}
-				continue
+				if len(con.Clusters) > 0 {
+					continue
+				}
 			}
 			if len(con.Clusters) > 0 {
 				// Should not happen
-				log.Infof("EDS REQ repeated %s %v/%v %v raw: %s ",
+				log.Infof("EDS: REQ repeated %s %v/%v %v raw: %s ",
 					node, clusters2, con.Clusters, peerAddr, discReq.String())
 			}
 			// Initial request
 			if edsDebug {
-				log.Infof("EDS REQ %s %v %v raw: %s ",
+				log.Infof("EDS: REQ %s %v %v raw: %s ",
 					node, clusters2, peerAddr, discReq.String())
 			}
 
@@ -365,7 +385,7 @@ func (s *DiscoveryServer) StreamEndpoints(stream xdsapi.EndpointDiscoveryService
 		}
 
 		if len(con.Clusters) > 0 {
-			response := s.endpoints(con.Clusters)
+			response := s.endpoints(s.mesh, con.Clusters)
 			err := stream.Send(response)
 			if err != nil {
 				return err
@@ -387,6 +407,13 @@ func (s *DiscoveryServer) StreamEndpoints(stream xdsapi.EndpointDiscoveryService
 // Primary code path is from v1 discoveryService.clearCache(), which is added as a handler
 // to the model ConfigStorageCache and Controller.
 func EdsPushAll() {
+	// TODO: rename to XdsLegacyPushAll
+	edsPushAll() // we want endpoints ready first
+
+	ldsPushAll()
+}
+
+func edsPushAll() {
 	if edsDebug {
 		log.Infoa("EDS cache reset")
 	}
@@ -409,17 +436,19 @@ func EdsPushAll() {
 	}
 }
 
-// Edsz implements a status and debug interface for EDS.
+// EDSz implements a status and debug interface for EDS.
 // It is mapped to /debug/edsz on the monitor port (9093).
-func Edsz(w http.ResponseWriter, req *http.Request) {
+func EDSz(w http.ResponseWriter, req *http.Request) {
 	if req.Form.Get("debug") != "" {
 		edsDebug = req.Form.Get("debug") == "1"
 		return
 	}
 	if req.Form.Get("push") != "" {
-		EdsPushAll()
+		edsPushAll()
 	}
+	edsClusterMutex.Lock()
 	data, err := json.Marshal(edsClusters)
+	edsClusterMutex.Unlock()
 	if err != nil {
 		_, _ = w.Write([]byte(err.Error()))
 		return
