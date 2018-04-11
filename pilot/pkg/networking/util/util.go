@@ -14,7 +14,10 @@
 
 package util
 
+// TODO(mostrowski): move most of these functions to a lower level util pkg, they are not Pilot specific.
+
 import (
+	"bytes"
 	"strconv"
 	"strings"
 	"time"
@@ -26,8 +29,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/types"
 	"k8s.io/apimachinery/pkg/util/json"
-
-	"bytes"
 
 	"istio.io/istio/pkg/log"
 )
@@ -169,14 +170,16 @@ func MessageToStruct(msg proto.Message) *types.Struct {
 	return s
 }
 
-// ConvertGogoDurationToDuration converts from gogo proto duration to time.duration
-func ConvertGogoDurationToDuration(d *types.Duration) time.Duration {
+// GogoDurationToDuration converts from gogo proto duration to time.duration
+func GogoDurationToDuration(d *types.Duration) time.Duration {
 	if d == nil {
 		return 0
 	}
 	dur, err := types.DurationFromProto(d)
 	if err != nil {
+		// TODO(mostrowski): add error handling instead.
 		log.Warnf("error converting duration %#v, using 0: %v", d, err)
+		return 0
 	}
 	return dur
 }
