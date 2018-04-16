@@ -353,6 +353,13 @@ mixs:
 $(MIXER_GO_BINS):
 	bin/gobuild.sh $@ istio.io/istio/pkg/version ./mixer/cmd/$(@F)
 
+GALLEY_GO_BINS:=${ISTIO_OUT}/gals
+gals:
+	bin/gobuild.sh ${ISTIO_OUT}/gals istio.io/istio/pkg/version ./galley/cmd/gals
+
+$(GALLEY_GO_BINS):
+	bin/gobuild.sh $@ istio.io/istio/pkg/version ./galley/cmd/$(@F)
+
 servicegraph:
 	bin/gobuild.sh ${ISTIO_OUT}/$@ istio.io/istio/pkg/version ./addons/servicegraph/cmd/server
 
@@ -365,7 +372,7 @@ $(SECURITY_GO_BINS):
 
 .PHONY: build
 # Build will rebuild the go binaries.
-build: depend $(PILOT_GO_BINS_SHORT) mixc mixs node_agent istio_ca flexvolume istioctl
+build: depend $(PILOT_GO_BINS_SHORT) mixc mixs node_agent istio_ca flexvolume istioctl gals
 
 # The following are convenience aliases for most of the go targets
 # The first block is for aliases that are the same as the actual binary,
@@ -455,6 +462,9 @@ test-bins: $(PILOT_TEST_BINS)
 
 localTestEnv: test-bins
 	bin/testEnvLocalK8S.sh ensure
+
+localTestEnvCleanup: test-bins
+	bin/testEnvLocalK8S.sh stop
 
 # Temp. disable parallel test - flaky consul test.
 # https://github.com/istio/istio/issues/2318
@@ -597,10 +607,18 @@ installgen:
 
 # A make target to generate all the YAML files
 generate_yaml:
-	./install/updateVersion.sh -a ${HUB},${TAG} 
+	./install/updateVersion.sh -a ${HUB},${TAG}
 
 $(HELM):
 	bin/init_helm.sh
+
+# create istio-remote.yaml
+istio-remote.yaml: $(HELM)
+	cat install/kubernetes/templates/namespace.yaml > install/kubernetes/$@
+	$(HELM) template --namespace=istio-system \
+		  --set global.pilotIp="pilotIpReplace" \
+		  --set global.mixerIp="mixerIpReplace" \
+		  install/kubernetes/helm/istio-remote >> install/kubernetes/$@
 
 # creates istio.yaml istio-auth.yaml istio-one-namespace.yaml istio-one-namespace-auth.yaml
 # Ensure that values-$filename is present in install/kubernetes/helm/istio
