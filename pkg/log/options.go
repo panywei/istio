@@ -138,7 +138,7 @@ func (o *Options) SetOutputLevel(scope string, level Level) {
 	if scope == DefaultScopeName {
 		// see if we have an entry without a scope prefix (which represents the default scope)
 		for i, ol := range levels {
-			if strings.Index(ol, ":") < 0 {
+			if !strings.Contains(ol, ":") {
 				levels[i] = sl
 				o.outputLevels = strings.Join(levels, ",")
 				return
@@ -166,7 +166,7 @@ func (o *Options) GetOutputLevel(scope string) (Level, error) {
 	if scope == DefaultScopeName {
 		// see if we have an entry without a scope prefix (which represents the default scope)
 		for _, ol := range levels {
-			if strings.Index(ol, ":") < 0 {
+			if !strings.Contains(ol, ":") {
 				_, l, err := convertScopedLevel(ol)
 				return l, err
 			}
@@ -192,7 +192,7 @@ func (o *Options) SetStackTraceLevel(scope string, level Level) {
 	if scope == DefaultScopeName {
 		// see if we have an entry without a scope prefix (which represents the default scope)
 		for i, ol := range levels {
-			if strings.Index(ol, ":") < 0 {
+			if !strings.Contains(ol, ":") {
 				levels[i] = sl
 				o.stackTraceLevels = strings.Join(levels, ",")
 				return
@@ -220,7 +220,7 @@ func (o *Options) GetStackTraceLevel(scope string) (Level, error) {
 	if scope == DefaultScopeName {
 		// see if we have an entry without a scope prefix (which represents the default scope)
 		for _, ol := range levels {
-			if strings.Index(ol, ":") < 0 {
+			if !strings.Contains(ol, ":") {
 				_, l, err := convertScopedLevel(ol)
 				return l, err
 			}
@@ -325,9 +325,10 @@ func (o *Options) AttachCobraFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().BoolVar(&o.JSONEncoding, "log_as_json", o.JSONEncoding,
 		"Whether to format output as JSON or in plain console-friendly format")
 
-	if len(scopes) > 1 {
+	allScopes := Scopes()
+	if len(allScopes) > 1 {
 		s := ""
-		for name := range scopes {
+		for name := range allScopes {
 			if s != "" {
 				s = s + ", "
 			}

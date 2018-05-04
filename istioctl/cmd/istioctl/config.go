@@ -38,15 +38,15 @@ const (
 var (
 
 	// TODO - Add diff option to get the difference between pilot's xDS API response and the proxy config
-	// TODO - Add a full mesh Pilot look up (e.g. All clusters, all endpoints, etc)
 	// TODO - Add support for non-default proxy config locations
 	// TODO - Add support for non-kube istio deployments
 	// TODO - Bring Endpoint and Pilot config types more inline with each other
 	configCmd = &cobra.Command{
-		Use:   "proxy-config <endpoint|pilot> <pod-name> [<configuration-type>]",
+		Use:   "proxy-config <endpoint|pilot> <pod-name|mesh> [<configuration-type>]",
 		Short: "Retrieves proxy configuration for the specified pod from the endpoint proxy or Pilot [kube only]",
 		Long: `
 Retrieves proxy configuration for the specified pod from the endpoint proxy or Pilot when running in Kubernetes.
+It is also able to retrieve the state of the entire mesh by using mesh instead of <pod-name>. This is only available when querying Pilot.
 
 Available configuration types:
 
@@ -60,8 +60,11 @@ Available configuration types:
 		Example: `# Retrieve all config for productpage-v1-bb8d5cbc7-k7qbm pod from the endpoint proxy
 istioctl proxy-config endpoint productpage-v1-bb8d5cbc7-k7qbm
 
-# Retrieve cluster config for productpage-v1-bb8d5cbc7-k7qbm pod from Pilot
-istioctl proxy-config pilot productpage-v1-bb8d5cbc7-k7qbm clusters
+# Retrieve eds config for productpage-v1-bb8d5cbc7-k7qbm pod from Pilot
+istioctl proxy-config pilot productpage-v1-bb8d5cbc7-k7qbm eds
+
+# Retrieve ads config for the mesh from Pilot
+istioctl proxy-config pilot mesh ads
 
 # Retrieve static config for productpage-v1-bb8d5cbc7-k7qbm pod in the application namespace from the endpoint proxy
 istioctl proxy-config endpoint -n application productpage-v1-bb8d5cbc7-k7qbm static`,
@@ -82,29 +85,37 @@ istioctl proxy-config endpoint -n application productpage-v1-bb8d5cbc7-k7qbm sta
 			if ns == v1.NamespaceAll {
 				ns = defaultNamespace
 			}
-			var debug string
-			if location == "pilot" {
-				proxyID := fmt.Sprintf("%v:%v", podName, ns)
-				pilots, pilotErr := getPilotPods()
-				if pilotErr != nil {
-					return pilotErr
+			switch location {
+			case "pilot":
+				var proxyID string
+				if podName == "mesh" {
+					proxyID = "all"
+				} else {
+					proxyID = fmt.Sprintf("%v.%v", podName, ns)
+				}
+				pilots, err := getPilotPods()
+				if err != nil {
+					return err
 				}
 				if len(pilots) == 0 {
 					return errors.New("unable to find any Pilot instances")
 				}
-				debug, pilotErr = callPilotDiscoveryDebug(pilots[0].Name, pilots[0].Namespace, proxyID, configType)
+				debug, pilotErr := callPilotDiscoveryDebug(pilots[0].Name, pilots[0].Namespace, proxyID, configType)
 				if pilotErr != nil {
-					return pilotErr
+					fmt.Println(debug)
+					return err
 				}
-			} else if location == "endpoint" {
-				var endpointErr error
-				debug, endpointErr = callPilotAgentDebug(podName, ns, configType)
-				if endpointErr != nil {
-					return endpointErr
+				fmt.Println(debug)
+			case "endpoint":
+				debug, err := callPilotAgentDebug(podName, ns, configType)
+				if err != nil {
+					fmt.Println(debug)
+					return err
 				}
+				fmt.Println(debug)
+			default:
+				log.Errorf("%q debug not supported", location)
 			}
-
-			fmt.Println(debug)
 			return nil
 		},
 	}
@@ -137,7 +148,7 @@ func callPilotDiscoveryDebug(podName, podNamespace, proxyID, configType string) 
 	cmd := []string{"/usr/local/bin/pilot-discovery", "debug", proxyID, configType}
 	stdout, stderr, err := podExec(podName, podNamespace, discoveryContainer, cmd)
 	if err != nil {
-		return "", err
+		return stdout.String(), err
 	} else if stderr.String() != "" {
 		return "", fmt.Errorf("unable to call pilot-disocver debug: %v", stderr.String())
 	}
@@ -148,7 +159,7 @@ func callPilotAgentDebug(podName, podNamespace, configType string) (string, erro
 	cmd := []string{"/usr/local/bin/pilot-agent", "debug", configType}
 	stdout, stderr, err := podExec(podName, podNamespace, proxyContainer, cmd)
 	if err != nil {
-		return "", err
+		return stdout.String(), err
 	} else if stderr.String() != "" {
 		return "", fmt.Errorf("unable to call pilot-agent debug: %v", stderr.String())
 	}
